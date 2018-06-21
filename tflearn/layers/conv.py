@@ -9,7 +9,7 @@ import tflearn
 from .. import variables as vs
 from .. import activations
 from .. import initializations
-from .. import losses
+from .. import regularizers
 from .. import utils
 from ..layers.normalization import batch_normalization
 
@@ -81,7 +81,7 @@ def conv_2d(incoming, nb_filter, filter_size, strides=1, padding='same',
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size, regularizer=W_regul,
                         initializer=W_init, trainable=trainable,
                         restore=restore)
@@ -204,7 +204,7 @@ def conv_2d_transpose(incoming, nb_filter, filter_size, output_shape,
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size,
                         regularizer=W_regul, initializer=W_init,
                         trainable=trainable, restore=restore)
@@ -358,7 +358,7 @@ def atrous_conv_2d(incoming, nb_filter, filter_size, rate=1, padding='same',
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size, regularizer=W_regul,
                         initializer=W_init, trainable=trainable,
                         restore=restore)
@@ -493,7 +493,7 @@ def grouped_conv_2d(incoming, channel_multiplier, filter_size, strides=1,
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size, regularizer=W_regul,
                         initializer=W_init, trainable=trainable,
                         restore=restore)
@@ -681,7 +681,7 @@ def upscore_layer(incoming, num_classes, shape=None, kernel_size=4,
         4-D Tensor [batch, height, width, in_channels].
 
     Output:
-        4-D Tensor [batch, pooled height, pooled width, in_channels].
+        4-D Tensor [pooled height, pooled width].
 
     Arguments:
         incoming: `Tensor`. Incoming 4-D Layer to upsample.
@@ -722,15 +722,15 @@ def upscore_layer(incoming, num_classes, shape=None, kernel_size=4,
                            reuse=reuse) as scope:
         name = scope.name
 
+        in_shape = tf.shape(incoming)
         if shape is None:
             # Compute shape out of Bottom
-            in_shape = tf.shape(incoming)
 
             h = ((in_shape[1] - 1) * strides[1]) + 1
             w = ((in_shape[2] - 1) * strides[1]) + 1
             new_shape = [in_shape[0], h, w, num_classes]
         else:
-            new_shape = [shape[0], shape[1], shape[2], num_classes]
+            new_shape = [in_shape[0], shape[0], shape[1], num_classes]
         output_shape = tf.stack(new_shape)
 
         def get_deconv_filter(f_shape):
@@ -760,6 +760,116 @@ def upscore_layer(incoming, num_classes, shape=None, kernel_size=4,
 
         weights = get_deconv_filter(filter_size)
         deconv = tf.nn.conv2d_transpose(incoming, weights, output_shape,
+                                        strides=strides, padding='SAME')
+
+    deconv.scope = scope
+
+    # Track output tensor.
+    tf.add_to_collection(tf.GraphKeys.LAYER_TENSOR + '/' + name, deconv)
+
+    return deconv
+
+def upscore_layer3d(incoming, num_classes, shape=None, kernel_size=4,
+                  strides=2, trainable=True, restore=True,
+                  reuse=False, scope=None, name='Upscore'):
+    """ Upscore.
+
+    This implements the upscore layer as used in
+    (Fully Convolutional Networks)[http://arxiv.org/abs/1411.4038].
+    The upscore layer is initialized as bilinear upsampling filter.
+
+    Input:
+        5-D Tensor [batch, height, width, depth, in_channels].
+
+    Output:
+        5-D Tensor [batch, pooled height, pooled width, pooled depth, in_channels].
+
+    Arguments:
+        incoming: `Tensor`. Incoming 4-D Layer to upsample.
+        num_classes: `int`. Number of output feature maps.
+        shape: `list of int`. Dimension of the output map
+            [new height, new width, new depth]. For convinience four values
+             are allows [new height, new width, new depth, X], where X
+             is ignored.
+        kernel_size: 'int` or `list of int`. Upsampling kernel size.
+        strides: 'int` or `list of int`. Strides of conv operation.
+            Default: [1 2 2 2 1].
+        trainable: `bool`. If True, weights will be trainable.
+        restore: `bool`. If True, this layer weights will be restored when
+            loading a model.
+        reuse: `bool`. If True and 'scope' is provided, this layer variables
+            will be reused (shared).
+        scope: `str`. Define this layer scope (optional). A scope can be
+            used to share variables between layers. Note that scope will
+            override name.
+            name: A name for this layer (optional). Default: 'Upscore'.
+
+    Attributes:
+        scope: `Scope`. This layer scope.
+
+    Links:
+        (Fully Convolutional Networks)[http://arxiv.org/abs/1411.4038]
+
+    """
+    input_shape = utils.get_incoming_shape(incoming)
+    assert len(input_shape) == 5, "Incoming Tensor shape must be 5-D"
+
+    strides = utils.autoformat_kernel_3d(strides)
+    filter_size = utils.autoformat_filter_conv3d(kernel_size,
+                                                 num_classes,
+                                                 input_shape[-1])
+
+    # Variable Scope fix for older TF
+    try:
+        vscope = tf.variable_scope(scope, default_name=name, values=[incoming],
+                                   reuse=reuse)
+    except Exception:
+        vscope = tf.variable_op_scope([incoming], scope, name, reuse=reuse)
+
+    with vscope as scope:
+        name = scope.name
+
+        in_shape = tf.shape(incoming)
+        if shape is None:
+            # Compute shape out of Bottom
+
+            h = ((in_shape[1] - 1) * strides[1]) + 1
+            w = ((in_shape[2] - 1) * strides[1]) + 1
+            d = ((in_shape[3] - 1) * strides[1]) + 1
+            new_shape = [in_shape[0], h, w, d, num_classes]
+        else:
+            new_shape = [in_shape[0], shape[0], shape[1], shape[2], num_classes]
+        output_shape = tf.stack(new_shape)
+
+        def get_deconv_filter(f_shape):
+            """
+            Create filter weights initialized as bilinear upsampling.
+            """
+            width = f_shape[0]
+            heigh = f_shape[0]
+            depth = f_shape[0]
+            f = ceil(width/2.0)
+            c = (2 * f - 1 - f % 2) / (2.0 * f)
+            bilinear = np.zeros([f_shape[0], f_shape[1], f_shape[2]])
+            for x in range(width):
+                for y in range(heigh):
+                    for z in range(depth):
+                        value = (1 - abs(x / f - c)) * (1 - abs(y / f - c)) * (1 - abs(z / f - c))
+                        bilinear[x, y, z] = value
+            weights = np.zeros(f_shape)
+            for i in range(f_shape[3]):
+                weights[:, :, :, i, i] = bilinear
+
+            init = tf.constant_initializer(value=weights,
+                                           dtype=tf.float32)
+            W = vs.variable(name="up_filter", initializer=init,
+                            shape=weights.shape, trainable=trainable,
+                            restore=restore)
+            tf.add_to_collection(tf.GraphKeys.LAYER_VARIABLES + '/' + name, W)
+            return W
+
+        weights = get_deconv_filter(filter_size)
+        deconv = tf.nn.conv3d_transpose(incoming, weights, output_shape,
                                         strides=strides, padding='SAME')
 
     deconv.scope = scope
@@ -841,7 +951,7 @@ def conv_1d(incoming, nb_filter, filter_size, strides=1, padding='same',
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size, regularizer=W_regul,
                         initializer=W_init, trainable=trainable,
                         restore=restore)
@@ -1051,7 +1161,7 @@ def conv_3d(incoming, nb_filter, filter_size, strides=1, padding='same',
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size, regularizer=W_regul,
                         initializer=W_init, trainable=trainable,
                         restore=restore)
@@ -1173,7 +1283,7 @@ def conv_3d_transpose(incoming, nb_filter, filter_size, output_shape,
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size,
                         regularizer=W_regul, initializer=W_init,
                         trainable=trainable, restore=restore)
@@ -1616,7 +1726,7 @@ def resnext_block(incoming, nb_blocks, out_channels, cardinality,
                   reuse=False, scope=None, name="ResNeXtBlock"):
     """ ResNeXt Block.
 
-    A ResNeXt block as described in ResNeXt paper (Figure 2, c).
+    A ResNeXt block as described in ResNeXt paper (Figure 3.c).
 
     Input:
         4-D Tensor [batch, height, width, in_channels].
@@ -1923,7 +2033,7 @@ def highway_conv_2d(incoming, nb_filter, filter_size, strides=1, padding='same',
             W_init = initializations.get(weights_init)()
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size, regularizer=W_regul,
                         initializer=W_init, trainable=trainable,
                         restore=restore)
@@ -2052,7 +2162,7 @@ def highway_conv_1d(incoming, nb_filter, filter_size, strides=1, padding='same',
             filter_size = None
         W_regul = None
         if regularizer is not None:
-            W_regul = lambda x: losses.get(regularizer)(x, weight_decay)
+            W_regul = lambda x: regularizers.get(regularizer)(x, weight_decay)
         W = vs.variable('W', shape=filter_size,
                         regularizer=W_regul, initializer=W_init,
                         trainable=trainable, restore=restore)

@@ -63,7 +63,7 @@ def categorical_crossentropy(y_pred, y_true):
     with tf.name_scope("Crossentropy"):
         y_pred /= tf.reduce_sum(y_pred,
                                 reduction_indices=len(y_pred.get_shape())-1,
-                                keep_dims=True)
+                                keepdims=True)
         # manual computation of crossentropy
         y_pred = tf.clip_by_value(y_pred, tf.cast(_EPSILON, dtype=_FLOATX),
                                   tf.cast(1.-_EPSILON, dtype=_FLOATX))
@@ -103,7 +103,7 @@ def binary_crossentropy(y_pred, y_true):
             logits=y_pred, labels=y_true))
 
 
-def weighted_crossentropy(y_pred, y_true, weight):
+def weighted_crossentropy(y_pred, y_true, weight=1.):
     """ Weighted Crossentropy.
 
     Computes weighted sigmoid cross entropy between y_pred (logits) and y_true

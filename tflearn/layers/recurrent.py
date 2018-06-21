@@ -80,12 +80,12 @@ def _rnn_template(incoming, cell, dropout=None, return_seq=False,
 
     if dynamic:
         if return_seq:
-            o = outputs
+            o = tf.stack(outputs, 1)
         else:
             outputs = tf.transpose(tf.stack(outputs), [1, 0, 2])
             o = advanced_indexing_op(outputs, sequence_length)
     else:
-        o = outputs if return_seq else outputs[-1]
+        o = tf.stack(outputs, 1) if return_seq else outputs[-1]
 
     # Track output tensor.
     tf.add_to_collection(tf.GraphKeys.LAYER_TENSOR + '/' + name, o)
@@ -385,12 +385,12 @@ def bidirectional_rnn(incoming, rnncell_fw, rnncell_bw, return_seq=False,
 
     if dynamic:
         if return_seq:
-            o = outputs
+            o = tf.stack(outputs, 1)
         else:
             outputs = tf.transpose(tf.stack(outputs), [1, 0, 2])
             o = advanced_indexing_op(outputs, sequence_length)
     else:
-        o = outputs if return_seq else outputs[-1]
+        o = tf.stack(outputs, 1) if return_seq else outputs[-1]
 
     sfw = states_fw
     sbw = states_bw
@@ -412,7 +412,7 @@ class BasicRNNCell(core_rnn_cell.RNNCell):
                  bias=True, weights_init=None, trainable=True, restore=True,
                  reuse=False):
         if input_size is not None:
-            logging.warn("%s: The input_size parameter is deprecated." % self)
+            logging.warning("%s: The input_size parameter is deprecated." % self)
         self._num_units = num_units
         if isinstance(activation, str):
             self._activation = activations.get(activation)
@@ -471,11 +471,11 @@ class BasicLSTMCell(core_rnn_cell.RNNCell):
                  inner_activation=tf.sigmoid, bias=True, weights_init=None,
                  trainable=True, restore=True, reuse=False, batch_norm = False):
         if not state_is_tuple:
-            logging.warn(
+            logging.warning(
                 "%s: Using a concatenated state is slower and will soon be "
                 "deprecated.  Use state_is_tuple=True." % self)
         if input_size is not None:
-            logging.warn("%s: The input_size parameter is deprecated." % self)
+            logging.warning("%s: The input_size parameter is deprecated." % self)
         self._num_units = num_units
         self._forget_bias = forget_bias
         self._state_is_tuple = state_is_tuple
@@ -563,7 +563,7 @@ class GRUCell(core_rnn_cell.RNNCell):
                  inner_activation=tf.sigmoid, bias=True, weights_init=None,
                  trainable=True, restore=True, reuse=False):
         if input_size is not None:
-            logging.warn("%s: The input_size parameter is deprecated." % self)
+            logging.warning("%s: The input_size parameter is deprecated." % self)
         self._num_units = num_units
         if isinstance(activation, str):
             self._activation = activations.get(activation)

@@ -21,7 +21,8 @@ from .helpers.summarizer import summarize, summarize_activations, \
 from .layers import normalization
 from . import metrics
 from . import activations
-from . import losses
+from . import distances
+from . import regularizers
 from . import initializations
 from . import optimizers
 from . import summaries
